@@ -1,0 +1,105 @@
+name: Build Windows EXE
+
+# Runs automatically whenever you push to the repo, and can also be
+# triggered manually from the "Actions" tab with the "Run workflow" button.
+on:
+  push:
+    branches: [ "**" ]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    name: Build & Test NetworkMonitor.exe
+    runs-on: windows-latest
+
+    steps:
+      # 1. Get the source code onto the build machine
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # 2. Install Python ONLY on the temporary GitHub build machine.
+      #    This never touches your own computer.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # 3. Install build-time dependencies (PyInstaller)
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # 4. Sanity-check the application logic BEFORE compiling, using
+      #    plain Python. This catches real bugs early and quickly.
+      - name: Run self-test on source code
+        run: python app/main.py --selftest
+
+      # 5. Compile the standalone, self-contained Windows .exe.
+      #    --onefile bundles everything (including the Python runtime)
+      #    into a single NetworkMonitor.exe with no external installer.
+      #    --windowed hides the console window for a normal desktop-app feel.
+      - name: Build EXE with PyInstaller
+        run: >
+          pyinstaller --noconfirm --onefile --windowed
+          --name NetworkMonitor
+          --distpath dist
+          --workpath build
+          --specpath build
+          app/main.py
+
+      # 6. Test the COMPILED .exe itself (not just the source) by
+      #    running its built-in self-test mode. This proves the exe's
+      #    bundled Python runtime, SQLite, and networking code really
+      #    work on a clean Windows machine.
+      - name: Test compiled EXE (self-test)
+        shell: pwsh
+        run: |
+          dist\NetworkMonitor.exe --selftest
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Self-test FAILED. Log file (if any):"
+            Get-Content "$env:APPDATA\NetworkMonitor\run.log" -ErrorAction SilentlyContinue
+            exit 1
+          }
+          Write-Host "Self-test passed."
+
+      # 7. Test that the actual GUI window opens without crashing.
+      #    The app auto-closes itself after 3 seconds when this
+      #    environment variable is set (used only for this CI check).
+      - name: Test EXE launches (GUI smoke test)
+        shell: pwsh
+        env:
+          NETMON_AUTOCLOSE_MS: "3000"
+        run: |
+          $proc = Start-Process -FilePath "dist\NetworkMonitor.exe" -PassThru
+          $exited = $proc.WaitForExit(20000)
+          if (-not $exited) {
+            Write-Host "App did not close on its own -- killing it and failing the build."
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            exit 1
+          }
+          if ($proc.ExitCode -ne 0) {
+            Write-Host "App exited with a non-zero code: $($proc.ExitCode)"
+            exit 1
+          }
+          Write-Host "GUI launched and closed cleanly. Exit code: $($proc.ExitCode)"
+
+      # 8. Confirm the file exists and show its size in the build log.
+      - name: Verify EXE was produced
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist\NetworkMonitor.exe")) {
+            Write-Host "NetworkMonitor.exe was not found!"
+            exit 1
+          }
+          $size = (Get-Item "dist\NetworkMonitor.exe").Length / 1MB
+          Write-Host ("NetworkMonitor.exe built successfully ({0:N1} MB)" -f $size)
+
+      # 9. Upload the finished .exe as a downloadable build artifact.
+      - name: Upload NetworkMonitor.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: NetworkMonitor-Windows-EXE
+          path: dist/NetworkMonitor.exe
+          if-no-files-found: error
+          retention-days: 90
