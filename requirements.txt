@@ -1,0 +1,9 @@
+# These packages are installed automatically by the GitHub Actions
+# workflow on the Windows build machine ONLY. They are never installed
+# on your own computer, and are not required to run NetworkMonitor.exe.
+#
+# The application itself uses only Python's standard library
+# (tkinter, sqlite3, subprocess, socket, threading, ipaddress) so the
+# final .exe has no external runtime dependencies.
+
+pyinstaller==6.10.0
